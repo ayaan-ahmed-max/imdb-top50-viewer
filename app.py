@@ -59,4 +59,11 @@ def scrape_imdb(category: str) -> list[dict]:
     response = requests.get(url, headers=HEADERS, timeout=10)
     response.raise_for_status() #this raises an error if the request failed
 
+    # 2. parsing the html using beautifulsoup, beautiful soup will turn the raw html into a searchable tree
+
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    results = []
+    rank = 1
+
     
