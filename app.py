@@ -119,8 +119,7 @@ def scrape_imdb(category: str) -> list[dict]:
 
 
     # GUI APPLICATION CLASS -> THE MAIN COURSE ALSO THE HARDEST PART OF THIS
-
-    class IMDBApp(tk.Tk):
+class IMDBApp(tk.Tk):
 
         """ in this class i will create all the pages/frames """
 
@@ -128,7 +127,7 @@ def scrape_imdb(category: str) -> list[dict]:
             super().__init__()  # thsi calls the tk.Tk's init to set up the window big brain move
 
             #--window setup--
-            self.title("IMDB Top 50 Viewer")
+            self.title("IMDB Top 50 Vfiewer")
             self.geometry("950x680")
             self.minsize(800, 600)
             self.configure(bg=BG_DARK)
@@ -199,4 +198,133 @@ def scrape_imdb(category: str) -> list[dict]:
             )
 
             thread.start()
-            
+
+            def _fetch_data(self, category: str):
+                """ what this does is that it runs in a background thread
+                fetches data, stores it, then schedules GUI update on the main thread
+                
+                *p.s VERY IMPORTANT TO KNOW THAT TKINTER IS NOT THREAD-SAFE GUI widgets cannot be updated 
+                directly from a thread, thus we use self.after(0, callback) to schedule updates on the 
+                main thread safely """
+
+                try:
+
+                    items = scrape_imdb(category)
+                    self.data[category] = items
+
+                    # .Schedule GUI update on main thread
+                    self.after(0, lambda: self.frames["ResultsPage"].display_results(items))
+
+                except Exception as e:
+                    error_msg = f"Failed to load data.\n\nError: {str(e)}"
+                    self.after(0, lambda: self.frames["ResultsPage"].show_error(error_msg))
+
+
+class WelcomePage(tk.Frame):
+    """
+    The first screen the user sees.
+    Contains the title, a short tagline, and two options buttons.
+    """
+
+    def __init__(self, parent, controller):
+        super().__init__(parent, bg=BG_DARK)
+        self.controller = controller
+        self._build()
+
+    def _build(self):
+
+        # -- vertical centering trick :))
+        """
+        this puts empty rows with weight on top and bottom
+        and pushes the real content in the middle"""
+
+        self.rowconfigure(0, weight=1)   # top spacer
+        self.rowconfigure(1, weight=0)   # content
+        self.rowconfigure(2, weight=1)   # bottom spacer
+        self.columnconfigure(0, weight=1)
+
+        # content wrapper
+        wrapper = tk.Frame(self, bg=BG_DARK)
+        wrapper.grid(row=1, column=0)
+
+        # IMDB typa style gold accent bar at the top
+        accent = tk.Frame(self, bg=GOLD, height=4)
+        accent.place(relx=0, rely=0, relwidth=1)
+
+        # star icon (using unicode)
+        tk.Label(
+            wrapper, text="*", font=("Georgia", 48),
+            bg=BG_DARK, fg=GOLD
+        ).pack(pady=(0, 8))
+
+        # app title
+        tk.Label(
+            wrapper,
+            text="IMDB TOP 50",
+            font=self.controller.font_title,
+            bg=BG_DARK,
+            fg=TEXT_WHITE,
+        ).pack()
+
+        # tagline
+        tk.Label(
+            wrapper,
+            text="Discover the highest-rated movies and tv shows",
+            font=self.controller.font_sub,
+            bg=BG_DARK,
+            fg=TEXT_MUTED
+        ).pack(pady=(6, 40))
+
+        # buttons row
+        btn_frame = tk.Frame(wrapper, bg=BG_DARK)
+        btn_frame.pack()
+
+        self._make_button(
+            btn_frame,
+            label="🎬  Top 50 Movies",
+            category="movies",
+            side="left",
+        )
+        
+        tk.Frame(btn_frame, bg=BG_DARK, width=24).pack(side="left") # this is the spacer
+
+        self._make_button(
+            btn_frame,
+            label="📺  Top 50 TV Shows",
+            category="tvshows",
+            side="left",
+        )
+
+        # footer
+        tk.Label(
+            self,
+            text="Data sourced from IMDB - Built with Python and tkinter",
+
+            font=self.controller.font_small,
+            bg=BG_DARK,
+            fg="#555555",
+        ).place(relx=0.5, rely=0.97, anchor="s")
+
+    def _make_button(self, parent, label, category, side):
+        """This creates a styled sorta button that will basically just call the 
+        load_category function when it is clicked"""
+
+        btn = tk.Label(
+            parent,
+            text=label,
+            font=self.controller.font_btn,
+            bg=GOLD,
+            fg=TEXT_DARK,
+            padx=28,
+            pady=14,
+            cursor="hand2",
+            relief="flat",
+        )
+        btn.pack(side=side)
+
+        # also adding some hover effects i.e changing colour when the mouse enters or leaves
+        btn.bind("<Enter>", lambda e: btn.configure(bg=GOLD_HOVER))
+        btn.bind("<Leave>", lambda e: btn.configure(bg=GOLD))
+        btn.bind("<Button-1>", lambda e: self.controller.load_category(category))
+
+        
