@@ -219,7 +219,7 @@ class IMDBApp(tk.Tk):
                     error_msg = f"Failed to load data.\n\nError: {str(e)}"
                     self.after(0, lambda: self.frames["ResultsPage"].show_error(error_msg))
 
-
+# PAGE 1 -- WELCOME SCREEN
 class WelcomePage(tk.Frame):
     """
     The first screen the user sees.
@@ -327,4 +327,272 @@ class WelcomePage(tk.Frame):
         btn.bind("<Leave>", lambda e: btn.configure(bg=GOLD))
         btn.bind("<Button-1>", lambda e: self.controller.load_category(category))
 
+
+# PAGE 2 -- RESULTS SCREEN
+
+class ResultsPage(tk.Frame):
+    """ 
+    Displays thte list of top 50 movies or tvshows
+    
+    layout:
+    TOP BAR with a back button and title 
+    SCROLLABLE LIST of movie cards """
+
+    def __init__(self, parent, controller):
+        super().__init__(parent, bg=BG_DARK)
+        self.controller = controller
+        self.category = "movies"
+        self._build()
+
+    def _build(self):
+        # --top bar--
+        self.topbar = tk.Frame(self, bg=BG_DARK)
+        self.topbar.pack(fill="x")
+        self.topbar.pack_propagate(False)     # this doesnt shrink it to fit children
+
+        # back button
+        back_btn = tk.Label(
+            self.topbar,
+            text="← Back",
+            font=self.controller.font_btn,
+            bg=BG_HEADER,
+            fg=GOLD,
+            padx=16,
+            cursor="hand2",
+        )
+
+        back_btn.pack(side="left", fill="y")
+        back_btn.bind("<Button-1>", lambda e: self.controller.show_frame("WelcomePage"))
+        back_btn.bind("<Enter>", lambda e: back_btn.configure(fg=GOLD_HOVER))
+        back_btn.bind("<Leave>", lambda e: back_btn.configure(fg=GOLD))
+
+        # page title (updated dynamically)
+        self.title_label = tk.Label(
+            self.topbar,
+            text="",
+            font=self.controller.font_heading,
+            bg=BG_HEADER,
+            fg=TEXT_WHITE,
+        )
+        self.title_label.pack(side="left", padx=8)
+
+        # count badge
+        self.count_label = tk.Label(
+            self.topbar,
+            text="",
+            font=self.controller.font_small,
+            bg=GOLD,
+            fg=TEXT_DARK,
+            padx=8,
+            pady=3,
+        )
+        self.count_label.pack(side="left", padx=8)
+
+        # gold separator line under top bar
+        tk.Frame(self, bg=GOLD, height=2).pack(fill="x")
+
+        # scrollable area setup
+        # tkinter doesnt have a native scrollbar frame sooo the trick here is to use
+        # canvas scrollbar and the frame inside the canvas
+        scroll_area = tk.Frame(self, bg=BG_DARK)
+        scroll_area.pack(fill="both", expand=True)
+
+        self.canvas = tk.Canvas(scroll_area, bg=BG_DARK, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(
+            scroll_area, orient="vertical", command=self.canvas.yview
+        )
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+        # This inner frame is what we actually put widgets inside
+        self.inner = tk.Frame(self.canvas, bg=BG_DARK)
+        self.canvas_window = self.canvas.create_window(
+            (0, 0), window=self.inner, anchor="nw"
+        )
+ 
+        # Bind events to keep scroll region updated
+        self.inner.bind("<Configure>", self._on_inner_configure)
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
+ 
+        # Mouse wheel scrolling — bind to the whole app
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        self.canvas.bind_all("<Button-4>", self._on_mousewheel)   # Linux scroll up
+        self.canvas.bind_all("<Button-5>", self._on_mousewheel)   # Linux scroll down
+ 
+    def _on_inner_configure(self, event):
+        """Called when the inner frame changes size — updates the scroll region."""
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+ 
+    def _on_canvas_configure(self, event):
+        """Called when the canvas is resized — makes inner frame match canvas width."""
+        self.canvas.itemconfig(self.canvas_window, width=event.width)
+ 
+    def _on_mousewheel(self, event):
+        """Handles mouse wheel scrolling cross-platform."""
+        if event.num == 4:
+            self.canvas.yview_scroll(-1, "units")
+        elif event.num == 5:
+            self.canvas.yview_scroll(1, "units")
+        else:
+            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+ 
+    def set_category(self, category: str):
+        """Update the page title based on the chosen category."""
+        self.category = category
+        if category == "movies":
+            self.title_label.configure(text="Top 50 Movies")
+        else:
+            self.title_label.configure(text="Top 50 TV Shows")
+        self.count_label.configure(text="")
+ 
+    def _clear_inner(self):
+        """this remove all widgets from the scrollable area."""
+        for widget in self.inner.winfo_children():
+            widget.destroy()
+        # Reset scroll position to top
+        self.canvas.yview_moveto(0)
+ 
+    def show_loading(self):
+        """this shows a loading spinner message while data is being fetched."""
+        self._clear_inner()
+        tk.Label(
+            self.inner,
+            text="⏳  Loading data from IMDB...",
+            font=self.controller.font_heading,
+            bg=BG_DARK,
+            fg=TEXT_MUTED,
+        ).pack(pady=120)
+ 
+    def show_error(self, message: str):
+        """Show an error message if scraping fails."""
+        self._clear_inner()
+        tk.Label(
+            self.inner,
+            text="⚠️  Error",
+            font=self.controller.font_heading,
+            bg=BG_DARK,
+            fg=RED,
+        ).pack(pady=(80, 8))
+        tk.Label(
+            self.inner,
+            text=message,
+            font=self.controller.font_sub,
+            bg=BG_DARK,
+            fg=TEXT_MUTED,
+            wraplength=500,
+            justify="center",
+        ).pack()
+ 
+    def display_results(self, items: list[dict]):
+        """
+        this renders the full list of movie/TV show cards.
+        and it is called after scraping finishes (from the main thread).
+        """
+        self._clear_inner()
+        self.count_label.configure(text=f"{len(items)} titles")
+ 
+        # Outer padding frame
+        pad = tk.Frame(self.inner, bg=BG_DARK)
+        pad.pack(fill="x", padx=20, pady=12)
+ 
+        for item in items:
+            self._make_card(pad, item)
+ 
+    def _make_card(self, parent, item: dict):
+        """
+        Builds one card row for a single movie/show.
+ 
+        Visual layout of each card:
         
+         [rank]  TITLE (year)                    ★ rating    
+                 Genre chips                                 
+                 Description text...                          
+        """
+        # ── Card frame ──
+        card = tk.Frame(
+            parent,
+            bg=BG_CARD,
+            pady=10,
+            padx=14,
+        )
+        card.pack(fill="x", pady=4)
+ 
+        # ── Left column: rank number ──
+        rank_label = tk.Label(
+            card,
+            text=item["rank"],
+            font=font.Font(family="Georgia", size=20, weight="bold"),
+            bg=BG_CARD,
+            fg=GOLD,
+            width=3,
+            anchor="n",
+        )
+        rank_label.pack(side="left", anchor="nw", padx=(0, 10), pady=(2, 0))
+ 
+        # ── Right column: all the details ──
+        details = tk.Frame(card, bg=BG_CARD)
+        details.pack(side="left", fill="x", expand=True)
+ 
+        # Title row: TITLE (year) ── [spacer] ── ★ rating
+        title_row = tk.Frame(details, bg=BG_CARD)
+        title_row.pack(fill="x")
+ 
+        tk.Label(
+            title_row,
+            text=f"{item['title']}  ({item['year']})",
+            font=self.controller.font_item,
+            bg=BG_CARD,
+            fg=TEXT_WHITE,
+            anchor="w",
+        ).pack(side="left")
+ 
+        if item["rating"] != "N/A":
+            tk.Label(
+                title_row,
+                text=f"★  {item['rating']}",
+                font=font.Font(family="Helvetica", size=11, weight="bold"),
+                bg=GOLD,
+                fg=TEXT_DARK,
+                padx=8,
+                pady=1,
+            ).pack(side="right")
+ 
+        # Genre chips
+        if item["genre"] and item["genre"] != "N/A":
+            genre_row = tk.Frame(details, bg=BG_CARD)
+            genre_row.pack(fill="x", pady=(4, 0))
+            for g in item["genre"].split(","):
+                tk.Label(
+                    genre_row,
+                    text=g.strip(),
+                    font=self.controller.font_small,
+                    bg="#2a2a2a",
+                    fg=TEXT_MUTED,
+                    padx=6,
+                    pady=2,
+                ).pack(side="left", padx=(0, 4))
+ 
+        # Description
+        desc = item["desc"]
+        if len(desc) > 160:
+            desc = desc[:160].rstrip() + "…"
+        tk.Label(
+            details,
+            text=desc,
+            font=self.controller.font_desc,
+            bg=BG_CARD,
+            fg=TEXT_MUTED,
+            wraplength=700,
+            justify="left",
+            anchor="w",
+        ).pack(fill="x", pady=(5, 0))
+ 
+        # Subtle bottom border
+        tk.Frame(parent, bg="#2a2a2a", height=1).pack(fill="x")
+ 
+ 
+#  ENTRY POINT
+if __name__ == "__main__":
+    app = IMDBApp()
+    app.mainloop()   # starts the tkinter event loop — the app now waits for user input
