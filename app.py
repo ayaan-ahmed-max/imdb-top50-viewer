@@ -64,6 +64,12 @@ def scrape_imdb(category: str) -> list[dict]:
         page = browser.new_page(user_agent=HEADERS["User-Agent"])
         page.goto(url, timeout=30000)
         page.wait_for_selector("li.ipc-metadata-list-summary-item", timeout=15000)
+        # the first 25 items render almost immediately, but the rest stream in
+        # a moment later, so we wait until all 50 are actually in the DOM
+        page.wait_for_function(
+            "document.querySelectorAll('li.ipc-metadata-list-summary-item').length >= 50",
+            timeout=15000,
+        )
         html = page.content()
         browser.close()
 
