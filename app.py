@@ -1,7 +1,8 @@
 import tkinter as tk
 from tkinter import ttk, font
-import requests
+import re
 from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 import threading
 
 # CONSTANTS - the things that will not change throughout the code
@@ -53,56 +54,50 @@ def scrape_imdb(category: str) -> list[dict]:
         } """
     
     url = URLS[category]
-    
-    # 1. downloading the webpage html
 
-    response = requests.get(url, headers=HEADERS, timeout=10)
-    response.raise_for_status() #this raises an error if the request failed
+    # 1. downloading the rendered page with a real (headless) browser
+    #       plain requests gets blocked by IMDB's bot-detection (AWS WAF challenge),
+    #       so we use playwright/chromium which behaves like a real browser
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(user_agent=HEADERS["User-Agent"])
+        page.goto(url, timeout=30000)
+        page.wait_for_selector("li.ipc-metadata-list-summary-item", timeout=15000)
+        html = page.content()
+        browser.close()
 
     # 2. parsing the html using beautifulsoup, beautiful soup will turn the raw html into a searchable tree
 
-    soup = BeautifulSoup(response.text, "html.parser")
+    soup = BeautifulSoup(html, "html.parser")
 
     results = []
-    rank = 1
 
     # 3. finding every movie/show container on the page
-    #       IMDB wraps each item in a <dv class="lister-item mode-advanced"> this can be seen on the inspect of the page
+    #       IMDB's current search results wrap each item in <li class="ipc-metadata-list-summary-item">
 
-    items = soup.find_all("div", class_="lister-item mode-advanced")  # this basically just tells the library to just get all of the date from the div
+    items = soup.select("li.ipc-metadata-list-summary-item")
 
-    for item in items:
-        # Extracting the div - the text part
+    for rank, item in enumerate(items, start=1):
+        # ---title--- (comes prefixed with "1. ", "2. " etc so we strip that off)
+        title_tag = item.select_one("h3.ipc-title__text") or item.select_one("h4.ipc-title__text")
+        raw_title = title_tag.get_text(strip=True) if title_tag else "Unknown"
+        title = re.sub(r"^\d+\.\s*", "", raw_title)
 
-        content = item.find("div", class_="lister-item-content")
-        if not content:
-            continue        # just means that if theres nun there just keep going
-
-        # ---title---
-        title_tag = content.find("h3", class_="lister-item-header")
-        title = title_tag.find("a").text.strip() if title_tag else "Unknown"
-
-        # ---year---
-        year_tag = title_tag.find("span", class_="lister-item-year") if title_tag else None
-        year = year_tag.text.strip("() ") if year_tag else "N/A"
-
-        # sometimes the year on the web looks like "(2019-)" for ongoing tvshows so i am just going to clean it
-        year = year.replace("-", "-").strip()
+        # ---year--- (first item in the metadata list - year, runtime, certificate)
+        meta_items = item.select("div.dli-title-metadata li.ipc-inline-list__item")
+        year = meta_items[0].get_text(strip=True) if meta_items else "N/A"
 
         # ---rating---
-        rating_tag = content.find("strong")
-        rating = rating_tag.text.strip() if rating_tag else "N/A"
+        rating_tag = item.select_one("span.ipc-rating-star--rating")
+        rating = rating_tag.get_text(strip=True) if rating_tag else "N/A"
 
-        # ---genre---
-        genre_tag = content.find("span", class_="genre")
-        genre = genre_tag.text.strip() if genre_tag else "N/A"
+        # ---genre--- no longer shown on the search results card, IMDB removed it
+        genre = "N/A"
 
-        # ---description--- (this was a bit hard)
-        # the description is inside <p class="text-muted"> tags
-        # the first one is the certificate/runtime line - skipping that one
-        # the second one is the actual description
-        p_tags = content.find_all("p", class_="text-muted")
-        desc = p_tags[1].text.strip() if len(p_tags) > 1 else "No description available."
+        # ---description---
+        desc_tag = item.select_one("div.ipc-html-content-inner-div")
+        desc = desc_tag.get_text(strip=True) if desc_tag else "No description available."
 
         results.append({
             "rank": str(rank),
@@ -111,11 +106,10 @@ def scrape_imdb(category: str) -> list[dict]:
             "rating": rating,
             "genre":  genre,
             "desc":   desc,
-        })    
-        rank += 1
+        })
 
-        return results
-    
+    return results
+
 
 
     # GUI APPLICATION CLASS -> THE MAIN COURSE ALSO THE HARDEST PART OF THIS
@@ -155,7 +149,7 @@ class IMDBApp(tk.Tk):
             for PageClass in (WelcomePage, ResultsPage):
                 frame = PageClass(parent=container, controller=self)
                 self.frames[PageClass.__name__] = frame
-                frame.grid(row=0, column=0, stick="nsew")
+                frame.grid(row=0, column=0, sticky="nsew")
 
             # --show welcome screen first--
             self.show_frame("WelcomePage")
@@ -192,32 +186,32 @@ class IMDBApp(tk.Tk):
 
             results_page.show_loading()
             thread = threading.Thread(
-                target=self._fetch_date,
+                target=self._fetch_data,
                 args=(category,),
                 daemon=True  # daemon=True means that the thread automatically closes/dies if the app closes
             )
 
             thread.start()
 
-            def _fetch_data(self, category: str):
-                """ what this does is that it runs in a background thread
-                fetches data, stores it, then schedules GUI update on the main thread
-                
-                *p.s VERY IMPORTANT TO KNOW THAT TKINTER IS NOT THREAD-SAFE GUI widgets cannot be updated 
-                directly from a thread, thus we use self.after(0, callback) to schedule updates on the 
-                main thread safely """
+        def _fetch_data(self, category: str):
+            """ what this does is that it runs in a background thread
+            fetches data, stores it, then schedules GUI update on the main thread
 
-                try:
+            *p.s VERY IMPORTANT TO KNOW THAT TKINTER IS NOT THREAD-SAFE GUI widgets cannot be updated
+            directly from a thread, thus we use self.after(0, callback) to schedule updates on the
+            main thread safely """
 
-                    items = scrape_imdb(category)
-                    self.data[category] = items
+            try:
 
-                    # .Schedule GUI update on main thread
-                    self.after(0, lambda: self.frames["ResultsPage"].display_results(items))
+                items = scrape_imdb(category)
+                self.data[category] = items
 
-                except Exception as e:
-                    error_msg = f"Failed to load data.\n\nError: {str(e)}"
-                    self.after(0, lambda: self.frames["ResultsPage"].show_error(error_msg))
+                # .Schedule GUI update on main thread
+                self.after(0, lambda: self.frames["ResultsPage"].display_results(items))
+
+            except Exception as e:
+                error_msg = f"Failed to load data.\n\nError: {str(e)}"
+                self.after(0, lambda: self.frames["ResultsPage"].show_error(error_msg))
 
 # PAGE 1 -- WELCOME SCREEN
 class WelcomePage(tk.Frame):
@@ -346,7 +340,7 @@ class ResultsPage(tk.Frame):
 
     def _build(self):
         # --top bar--
-        self.topbar = tk.Frame(self, bg=BG_DARK)
+        self.topbar = tk.Frame(self, bg=BG_DARK, height=60)
         self.topbar.pack(fill="x")
         self.topbar.pack_propagate(False)     # this doesnt shrink it to fit children
 
